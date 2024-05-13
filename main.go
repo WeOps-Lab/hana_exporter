@@ -127,7 +127,7 @@ func main() {
 
 	// Register only scrapers enabled by flag.
 	log.Infof("Enabled scrapers:")
-	enabledScrapers := []collector.Scraper{}
+	var enabledScrapers []collector.Scraper
 	for scraper, enabled := range scraperFlags {
 		if *enabled {
 			log.Infof(" --collect.%s", scraper.Name())
