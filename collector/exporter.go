@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"github.com/jenningsloy318/hana_exporter/config"
 	"strconv"
 	"sync"
 	"time"
 
 	_ "github.com/SAP/go-hdb/driver"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/log"
+	log "github.com/sirupsen/logrus"
 )
 
 // Metric name parts.
@@ -64,10 +65,10 @@ type Exporter struct {
 //}
 
 // New returns a new HANA exporter for the provided DSN.
-func New(host string, user string, password string, scrapers []Scraper) *Exporter {
+func New(c config.Config, scrapers []Scraper) *Exporter {
 	//	BaseLabelValues[0] = host
 	return &Exporter{
-		dsn:      fmt.Sprintf("hdb://%s:%s@%s", user, password, host),
+		dsn:      fmt.Sprintf("hdb://%s:%s@%s:%s?timeout=%s", c.Databases.User, c.Databases.Password, c.Databases.Host, c.Databases.Port, c.Databases.Timeout),
 		scrapers: scrapers,
 		totalScrapes: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
@@ -140,6 +141,13 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	}
 	defer db.Close()
 
+	if err := db.Ping(); err != nil {
+		log.Errorln("Error pinging hana:", err)
+		ch <- prometheus.MustNewConstMetric(hanaUpDesc, prometheus.GaugeValue, 0)
+		e.error.Set(1)
+		return
+	}
+
 	// By design exporter should use maximum one connection per request.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
@@ -148,7 +156,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 
 	isUpRows, err := db.Query(upQuery)
 	if err != nil {
-		log.Errorln("Error pinging hana:", err)
+		log.Errorln("Error up query hana:", err)
 		ch <- prometheus.MustNewConstMetric(hanaUpDesc, prometheus.GaugeValue, 0)
 		e.error.Set(1)
 		return
@@ -159,7 +167,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 		var db_version string
 		for isUpRows.Next() {
 			if err := isUpRows.Scan(&sid, &db_name, &db_version); err != nil {
-				return 
+				return
 			}
 		}
 		HanaInfoLabelValues = []string{sid, db_name, db_version}

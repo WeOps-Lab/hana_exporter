@@ -1,18 +1,15 @@
 package main
 
 import (
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-
 	"github.com/jenningsloy318/hana_exporter/collector"
 	"github.com/jenningsloy318/hana_exporter/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/version"
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/alecthomas/kingpin.v2"
+	"net/http"
+	"os"
 )
 
 // define  flag
@@ -25,12 +22,8 @@ var (
 		"web.telemetry-path",
 		"Path under which to expose metrics.",
 	).Default("/hana").String()
-	configFile = kingpin.Flag("config.file", "Path to configuration file.").Default("hana.yml").String()
-	dsn        string
-	sc         = &config.SafeConfig{
-		C: &config.Config{},
-	}
-	reloadCh chan chan error
+	logLevel = kingpin.Flag("log.level", "Set log level").Default("info").String()
+	c        config.Config
 )
 
 // scrapers lists all possible collection methods and if they should be enabled by default.
@@ -49,30 +42,11 @@ var scrapers = map[collector.Scraper]bool{
 	collector.ScrapeRsTables{}:                true,
 }
 
-func init() {
-	prometheus.MustRegister(version.NewCollector("hana_exporter"))
-}
-
 // define new http handleer
 func newHandler(scrapers []collector.Scraper) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		target := r.URL.Query().Get("target")
-		if target == "" {
-			http.Error(w, "'target' parameter must be specified", 400)
-			return
-		}
-		log.Debugf("Scraping target '%s'", target)
-		var databaseConfig config.DatabaseConfig
-		var err error
-		if databaseConfig, err = sc.DatabaseConfigForTarget(target); err != nil {
-			log.Errorf("Error getting credentialfor target %s file: %s", target, err)
-			return
-		}
-
 		registry := prometheus.NewRegistry()
-
-		collector := collector.New(target, databaseConfig.User, databaseConfig.Password, scrapers)
-		registry.MustRegister(collector)
+		registry.MustRegister(collector.New(c, scrapers))
 
 		gatherers := prometheus.Gatherers{
 			prometheus.DefaultGatherer,
@@ -101,15 +75,23 @@ func main() {
 		scraperFlags[scraper] = f
 	}
 
+	c = config.Config{
+		Databases: config.DatabaseConfig{
+			Host:     os.Getenv("HOST"),
+			Port:     os.Getenv("PORT"),
+			User:     os.Getenv("USER"),
+			Password: os.Getenv("PASS"),
+			Timeout:  os.Getenv("TIMEOUT"),
+		},
+	}
+
 	// Parse flags.
-	//log.AddFlags(kingpin.CommandLine)
 	kingpin.Version(version.Print("hana_exporter"))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	if err := sc.ReloadConfig(*configFile); err != nil {
-		log.Fatalf("Error parsing config file: %s", err)
-	}
+	log.SetLevel(parseLogLevel(*logLevel))
+	log.Debugf("database config: %+v", c.Databases)
 
 	// landingPage contains the HTML served at '/'.
 	// TODO: Make this nicer and more informative.
@@ -135,29 +117,6 @@ func main() {
 		}
 	}
 
-	// load config  first time
-	hup := make(chan os.Signal)
-	reloadCh = make(chan chan error)
-	signal.Notify(hup, syscall.SIGHUP)
-
-	go func() {
-		for {
-			select {
-			case <-hup:
-				if err := sc.ReloadConfig(*configFile); err != nil {
-					log.Errorf("Error reloading config: %s", err)
-				}
-			case rc := <-reloadCh:
-				if err := sc.ReloadConfig(*configFile); err != nil {
-					log.Errorf("Error reloading config: %s", err)
-					rc <- err
-				} else {
-					rc <- nil
-				}
-			}
-		}
-	}()
-
 	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc(*metricPath, newHandler(enabledScrapers))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -166,4 +125,15 @@ func main() {
 
 	log.Infoln("Listening on", *listenAddress)
 	log.Fatal(http.ListenAndServe(*listenAddress, nil))
+}
+
+func parseLogLevel(value string) log.Level {
+	level, err := log.ParseLevel(value)
+
+	if err != nil {
+		log.WithField("log-level-value", value).Warningln("invalid log level from env var, using info")
+		return log.ErrorLevel
+	}
+
+	return level
 }
