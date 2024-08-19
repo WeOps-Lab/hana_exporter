@@ -18,10 +18,6 @@ var (
 		"web.listen-address",
 		"Address to listen on for web interface and telemetry.",
 	).Default(":9460").String()
-	metricPath = kingpin.Flag(
-		"web.telemetry-path",
-		"Path under which to expose metrics.",
-	).Default("/hana").String()
 	logLevel = kingpin.Flag("log.level", "Set log level").Default("info").String()
 	c        config.Config
 )
@@ -47,6 +43,9 @@ func newHandler(scrapers []collector.Scraper) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		registry := prometheus.NewRegistry()
 		registry.MustRegister(collector.New(c, scrapers))
+
+		// Remove Go collector
+		prometheus.Unregister(prometheus.NewGoCollector())
 
 		gatherers := prometheus.Gatherers{
 			prometheus.DefaultGatherer,
@@ -99,7 +98,7 @@ func main() {
 <head><title>HANA exporter</title></head>
 <body>
 <h1>HANA exporter</h1>
-<p><a href='` + *metricPath + `'>Metrics</a></p>
+<p><a href='/metrics'>Metrics</a></p>
 </body>
 </html>
 `)
@@ -117,8 +116,7 @@ func main() {
 		}
 	}
 
-	http.Handle("/metrics", promhttp.Handler())
-	http.HandleFunc(*metricPath, newHandler(enabledScrapers))
+	http.HandleFunc("/metrics", newHandler(enabledScrapers))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(landingPage)
 	})
