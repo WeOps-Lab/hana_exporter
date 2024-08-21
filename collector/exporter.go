@@ -141,18 +141,18 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	}
 	defer db.Close()
 
+	// By design exporter should use maximum one connection per request.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	// Set max lifetime for a connection.
+	db.SetConnMaxLifetime(1 * time.Minute)
+
 	if err := db.Ping(); err != nil {
 		log.Errorln("Error pinging hana:", err)
 		ch <- prometheus.MustNewConstMetric(hanaUpDesc, prometheus.GaugeValue, 0)
 		e.error.Set(1)
 		return
 	}
-
-	// By design exporter should use maximum one connection per request.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	// Set max lifetime for a connection.
-	db.SetConnMaxLifetime(1 * time.Minute)
 
 	isUpRows, err := db.Query(upQuery)
 	if err != nil {
